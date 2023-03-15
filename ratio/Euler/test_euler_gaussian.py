@@ -14,7 +14,7 @@ grey = torch.tensor(rgb2gray(rgb))
 vector_density = grey.flatten()
 vector_density = vector_density/torch.sum(vector_density)
 lines, columns = grey.shape
-num_samples = 300000
+num_samples = 30000
 cat = torch.distributions.Categorical(probs = vector_density)
 categorical_samples = cat.sample([num_samples])
 target_samples = torch.cat([((categorical_samples%columns + torch.rand(num_samples))/columns).unsqueeze(-1),((1-(categorical_samples//columns + torch.rand(num_samples))/lines)).unsqueeze(-1)], dim = -1)
@@ -24,5 +24,7 @@ cov = torch.cov(target_samples.T)
 proposed_samples = torch.distributions.MultivariateNormal(mean, (cov + cov.T)/2).sample([num_samples])
 
 from classifiers import *
-binary_classif = BinaryClassifier(target_samples, proposed_samples, [256,256,256])
-binary_classif.train(500,30000,lr = 5e-4,weight_decay  = 5e-6, verbose =True)
+samples = torch.cat([target_samples, proposed_samples], dim =0)
+labels = torch.cat([torch.ones(num_samples), torch.zeros(num_samples)], dim = 0).long()
+binary_classif = Classifier(2,samples, labels, [128,128,128])
+binary_classif.train(500,3000,lr = 5e-3,weight_decay  = 0 , verbose =True)
