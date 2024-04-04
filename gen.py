@@ -47,6 +47,7 @@ class GenerativeClassifier(torch.nn.Module):
         super().__init__()
         self.sample_dim = samples_dim
         self.C = labels_dim
+        self.structure = structure
         self.conditional_model = FlowConditionalDensityEstimation(torch.randn(1, samples_dim),
                                                                   torch.ones(1, labels_dim), structure)
         if prior_probs is None:
@@ -102,6 +103,22 @@ class GenerativeClassifier(torch.nn.Module):
         self.to(torch.device('cpu'))
         return train_loss_trace
 
+    def gibbs(self, T, epochs, batch_size, train_samples, train_labels,list_test_samples = [], list_test_prior_probs = [], recording_frequency = 1, lr = 5e-4, weight_decay = 5e-5):
+        self.train(epochs, batch_size, train_samples, train_labels, [],[],recording_frequency, lr, weight_decay)
+        total_samples = torch.cat([train_samples] + list_test_samples, dim = 0)
+        total_labels = [train_labels]
+        for test_samples, test_prior_probs in zip(list_test_samples, list_test_prior_probs):
+            total_labels+= [torch.nn.functional.one_hot(torch.distributions.Categorical(torch.exp(self.log_posterior_prob(test_samples, test_prior_probs))).sample(), num_classes = self.C)]
+        total_labels = torch.cat(total_labels, dim = 0)
+        for t in range(T):
+            self.conditional_model = FlowConditionalDensityEstimation(torch.randn(1, self.samples_dim),torch.ones(1, self.C), structure)
+            self.train(epochs, batch_size, total_samples, total_labels, [],[],recording_frequency, lr, weight_decay)
+            print(compute_accuracy(model_gen.log_posterior_prob(train_samples, train_prior_probs), train_labels))
+            total_labels = [train_labels]
+            for test_samples, test_prior_probs in zip(list_test_samples, list_test_prior_probs):
+                total_labels += [torch.nn.functional.one_hot(torch.distributions.Categorical(
+                    torch.exp(self.log_posterior_prob(test_samples, test_prior_probs))).sample(), num_classes=self.C)]
+            total_labels = torch.cat(total_labels, dim=0)
 
 sample_dim = train_samples.shape[-1]
 C = train_labels.shape[-1]
