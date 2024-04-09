@@ -18,8 +18,8 @@ samples, randperm = shuffle(logit_transform.transform(samples))
 labels,_ = shuffle(labels, randperm)
 pca_transform = PCA(samples, n_components=100)
 samples = pca_transform.transform(samples)
-unlabeled_samples, unlabeled_labels = samples[:5000], labels[:5000].float()
-samples, labels = samples[5000:15000], labels[5000:15000].float()
+unlabeled_samples, unlabeled_labels = samples[:20000], labels[:20000].float()
+samples, labels = samples[20000:60000], labels[20000:60000].float()
 
 r = range(1, 11)
 train_prior_probs = torch.tensor([1 for i in r])
@@ -79,7 +79,7 @@ class GenerativeClassifier(torch.nn.Module):
         log_joint = self.log_prob(samples) + torch.log(prior.unsqueeze(0))
         return log_joint - torch.logsumexp(log_joint, dim = -1, keepdim=True)
 
-    def train(self, epochs, batch_size, train_samples, train_labels, list_test_samples = [], list_test_prior_probs = [], recording_frequency=1, lr=5e-3, weight_decay=5e-5):
+    def train(self, epochs, batch_size, train_samples, train_labels, list_test_samples = [], list_test_prior_probs = [],list_test_labels = [],verbose = False, recording_frequency=1, lr=5e-3, weight_decay=5e-5):
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.to(device)
         para_dict = []
@@ -89,7 +89,9 @@ class GenerativeClassifier(torch.nn.Module):
         total_samples = torch.cat([train_samples] + list_test_samples, dim = 0)
         total_labels = torch.cat([train_labels] + [list_test_prior_probs[i].unsqueeze(0).repeat(list_test_samples[i].shape[0],1) for i in range(len(list_test_prior_probs))], dim=0)
         dataset = torch.utils.data.TensorDataset(total_samples, total_labels)
-        train_loss_trace = []
+        if verbose:
+            train_loss_trace = []
+            list_test_loss_trace = [[] for i in range(len(list_test_samples))]
         pbar = tqdm(range(epochs))
         for __ in pbar:
             self.to(device)
@@ -99,30 +101,39 @@ class GenerativeClassifier(torch.nn.Module):
                 loss = self.loss(batch[0].to(device), batch[1].to(device))
                 loss.backward()
                 optimizer.step()
-            if __ % recording_frequency == 0:
+            if __ % recording_frequency == 0 and verbose:
                 with torch.no_grad():
                     self.to(torch.device('cpu'))
                     train_loss = self.loss(train_samples, train_labels).item()
                     train_loss_trace.append(train_loss)
-                    pbar.set_postfix_str(' train_loss = ' + str(round(train_loss, 4)) + '; device = ' + str(device))
+                    postfix_str = 'device = ' + str(
+                        device) + '; train_loss = ' + str(round(train_loss, 4))
+                    for i in range(len(list_test_samples)):
+                        test_loss = self.loss(list_test_samples[i], list_test_labels[i]).item()
+                        list_test_loss_trace[i].append(test_loss)
+                        postfix_str += '; test_loss_' + str(i) + ' = ' + str(round(test_loss, 4))
+                    pbar.set_postfix_str(postfix_str)
         self.to(torch.device('cpu'))
-        return train_loss_trace
+        if verbose:
+            return train_loss_trace, list_test_loss_trace
 
-    def gibbs(self, T, epochs, batch_size, train_samples, train_labels,list_test_samples = [], list_test_prior_probs = [], recording_frequency = 1, lr = 5e-4, weight_decay = 5e-5):
-        self.train(epochs, batch_size, train_samples, train_labels, [],[],recording_frequency, lr, weight_decay)
+    def gibbs(self, T, epochs, batch_size, train_samples, train_labels,list_test_samples = [], list_test_prior_probs = [], list_test_labels = [], recording_frequency = 1, lr = 5e-3, weight_decay = 5e-5):
+        self.train(epochs, batch_size, train_samples, train_labels, [],[],[],False,recording_frequency, lr, weight_decay)
         total_samples = torch.cat([train_samples] + list_test_samples, dim = 0)
+        print(compute_accuracy(model_gen.log_posterior_prob(train_samples, train_prior_probs), train_labels))
         total_labels = [train_labels]
-        for test_samples, test_prior_probs in zip(list_test_samples, list_test_prior_probs):
-            total_labels+= [torch.nn.functional.one_hot(torch.distributions.Categorical(torch.exp(self.log_posterior_prob(test_samples, test_prior_probs))).sample(), num_classes = self.C)]
-        total_labels = torch.cat(total_labels, dim = 0)
+        for i in range(len(list_test_samples)):
+            print(compute_accuracy(model_gen.log_posterior_prob(list_test_samples[i], list_test_prior_probs[i]),list_test_labels[i]))
+            total_labels += [torch.nn.functional.one_hot(torch.distributions.Categorical(torch.exp(self.log_posterior_prob(list_test_samples[i], list_test_prior_probs[i]))).sample(),num_classes=self.C)]
+        total_labels = torch.cat(total_labels, dim=0)
         for t in range(T):
-            self.conditional_model = FlowConditionalDensityEstimation(torch.randn(1, self.samples_dim),torch.ones(1, self.C), structure)
-            self.train(epochs, batch_size, total_samples, total_labels, [],[],recording_frequency, lr, weight_decay)
+            self.conditional_model = FlowConditionalDensityEstimation(torch.randn(1, self.sample_dim),torch.ones(1, self.C), structure)
+            self.train(epochs, batch_size, total_samples, total_labels, [],[],[],False,recording_frequency, lr, weight_decay)
             print(compute_accuracy(model_gen.log_posterior_prob(train_samples, train_prior_probs), train_labels))
             total_labels = [train_labels]
-            for test_samples, test_prior_probs in zip(list_test_samples, list_test_prior_probs):
-                total_labels += [torch.nn.functional.one_hot(torch.distributions.Categorical(
-                    torch.exp(self.log_posterior_prob(test_samples, test_prior_probs))).sample(), num_classes=self.C)]
+            for i in range(len(list_test_samples)):
+                print(compute_accuracy(model_gen.log_posterior_prob(list_test_samples[i], list_test_prior_probs[i]), list_test_labels[i]))
+                total_labels += [torch.nn.functional.one_hot(torch.distributions.Categorical(torch.exp(self.log_posterior_prob(list_test_samples[i], list_test_prior_probs[i]))).sample(), num_classes=self.C)]
             total_labels = torch.cat(total_labels, dim=0)
 
 sample_dim = train_samples.shape[-1]
@@ -130,4 +141,5 @@ C = train_labels.shape[-1]
 structure = [[ConditionalRealNVPLayer, {'hidden_dims': [80, 80, 80]}] for i in range(6)] + [[ConditionalDIFLayer, {'hidden_dims': [32, 32], 'K': 3}] for i in range(1)]
 model_gen = GenerativeClassifier(sample_dim,C, structure)
 print(model_gen.compute_number_params())
-model_gen.gibbs(5,200, int(train_samples.shape[0]/20), [test_samples], [test_prior_probs], 20, 5e-4, 5e-6)
+model_gen.gibbs(20,200, int(train_samples.shape[0]/20),train_samples, train_labels, [test_samples], [test_prior_probs],[test_labels])
+

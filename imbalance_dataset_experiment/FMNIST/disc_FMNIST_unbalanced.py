@@ -7,7 +7,6 @@ from classifiers import *
 class Classifier(torch.nn.Module):
     def __init__(self, sample_dim, C, hidden_dimensions=[]):
         super().__init__()
-        assert samples.shape[0] == labels.shape[0], 'number of samples does not match number of samples'
         self.sample_dim = sample_dim
         self.C = C
         self.network_dimensions = [self.sample_dim] + hidden_dimensions + [self.C]
@@ -60,17 +59,15 @@ class Classifier(torch.nn.Module):
             return train_loss_trace, list_test_loss_trace
 
 number_runs = 5
-
 for run in range(number_runs):
     logit_transform = logit(alpha = 1e-6)
-    samples, labels = get_MNIST_dataset(one_hot = True)
+    samples, labels = get_FashionMNIST_dataset(one_hot = True)
     samples, randperm = shuffle(logit_transform.transform(samples))
     labels,_ = shuffle(labels, randperm)
     labels = labels.float()
     pca_transform = PCA(samples, n_components=100)
     samples = pca_transform.transform(samples)
     num_samples = torch.sum(labels, dim = 0)
-
     r = range(0, 10)
     train_prior_probs = torch.tensor([i+1 for i in r])*num_samples
     train_prior_probs = train_prior_probs/torch.sum(train_prior_probs)
@@ -89,9 +86,10 @@ for run in range(number_runs):
     train_samples, train_labels = torch.cat(train_samples),torch.cat(train_labels)
     test_samples, test_labels = torch.cat(test_samples),torch.cat(test_labels)
     datasets = (train_samples, train_prior_probs, train_labels, [test_samples], [test_prior_probs], [test_labels], logit_transform, pca_transform)
-    torch.save(datasets,"disc_MNIST_unbalanced/datasets_" + str(run) + ".pt")
+    torch.save(datasets,"disc_FMNIST_unbalanced/datasets_" + str(run) + ".pt")
+
 
     model_disc = Classifier(train_samples.shape[-1], train_labels.shape[-1], [256, 256, 256,256])
     print(model_disc.compute_number_params())
-    model_disc.train(400,int(70000 / 20),train_samples,train_labels)
-    torch.save(model_disc,"disc_MNIST_unbalanced/model_disc_" +str(run) + ".pt")
+    model_disc.train(800,int(70000/20),train_samples,train_labels)
+    torch.save(model_disc,"disc_FMNIST_unbalanced/model_disc_" +str(run) + ".pt")

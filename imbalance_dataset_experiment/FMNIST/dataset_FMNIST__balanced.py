@@ -3,13 +3,13 @@ from targets import *
 from conditional_density_estimation import *
 
 logit_transform = logit(alpha=1e-6)
-samples, labels = get_MNIST_dataset(one_hot=True)
+samples, labels = get_FashionMNIST_dataset(one_hot=True)
 samples, randperm = shuffle(logit_transform.transform(samples))
 labels, _ = shuffle(labels, randperm)
+labels = labels.float()
 pca_transform = PCA(samples, n_components=100)
 samples = pca_transform.transform(samples)
 num_samples = torch.sum(labels, dim=0)
-samples, labels = samples[20000:60000], labels[20000:60000].float()
 
 r = range(0, 10)
 train_prior_probs = torch.tensor([1 for i in r]) * num_samples

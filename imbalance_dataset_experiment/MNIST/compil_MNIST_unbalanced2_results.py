@@ -1,9 +1,61 @@
 import torch
-from pre_processing import *
-from targets import *
 from tqdm import tqdm
-from conditional_density_estimation import *
 from misc.metrics import *
+from conditional_density_estimation import *
+
+class Classifier(torch.nn.Module):
+    def __init__(self, sample_dim, C, hidden_dimensions=[]):
+        super().__init__()
+        self.sample_dim = sample_dim
+        self.C = C
+        self.network_dimensions = [self.sample_dim] + hidden_dimensions + [self.C]
+        network = []
+        for h0, h1 in zip(self.network_dimensions, self.network_dimensions[1:]):
+            network.extend([torch.nn.Linear(h0, h1), torch.nn.Tanh(), ])
+        self.f = torch.nn.Sequential(*network)
+
+    def compute_number_params(self):
+        return sum(p.numel() for p in self.parameters() if p.requires_grad)
+
+    def log_prob(self, samples):
+        temp = self.f.forward(samples)
+        return temp - torch.logsumexp(temp, dim=-1, keepdim=True)
+
+    def loss(self, samples, labels):
+        return -torch.mean(self.log_prob(samples) * labels)
+
+    def train(self, epochs, batch_size,train_samples, train_labels,list_test_samples = [], list_test_labels = [],verbose = False, recording_frequency = 1, lr=5e-4, weight_decay=5e-5):
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.to(device)
+        optimizer = torch.optim.Adam(self.parameters())
+        dataset = torch.utils.data.TensorDataset(train_samples, train_labels)
+        if verbose:
+            train_loss_trace = []
+            list_test_loss_trace = [[] for i in range(len(list_test_samples))]
+        pbar = tqdm(range(epochs))
+        for __ in pbar:
+            self.to(device)
+            dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True)
+            for _, batch in enumerate(dataloader):
+                optimizer.zero_grad()
+                loss = self.loss(batch[0].to(device), batch[1].to(device))
+                loss.backward()
+                optimizer.step()
+            if __ % recording_frequency == 0 and verbose:
+                with torch.no_grad():
+                    self.to(torch.device('cpu'))
+                    train_loss = self.loss(train_samples, train_labels).item()
+                    train_loss_trace.append(train_loss)
+                    postfix_str = 'device = ' + str(
+                        device) + '; train_loss = ' + str(round(train_loss, 4))
+                    for i in range(len(list_test_samples)):
+                        test_loss = self.loss(list_test_samples[i], list_test_labels[i]).item()
+                        list_test_loss_trace[i].append(test_loss)
+                        postfix_str += '; test_loss_'+ str(i) +' = ' + str(round(test_loss, 4))
+                    pbar.set_postfix_str(postfix_str)
+        self.to(torch.device('cpu'))
+        if verbose:
+            return train_loss_trace, list_test_loss_trace
 
 class GenerativeClassifier(torch.nn.Module):
     def __init__(self, samples_dim, labels_dim, structure, prior_probs=None):
@@ -96,43 +148,47 @@ class GenerativeClassifier(torch.nn.Module):
 
 number_runs = 5
 
+print("Retrieving discriminative results")
+
+list_train_accuracy = []
+list_test_accuracy = []
 for run in range(number_runs):
-    logit_transform = logit(alpha = 1e-6)
-    samples, labels = get_MNIST_dataset(one_hot = True)
-    samples, randperm = shuffle(logit_transform.transform(samples))
-    labels,_ = shuffle(labels, randperm)
-    labels = labels.float()
-    pca_transform = PCA(samples, n_components=100)
-    samples = pca_transform.transform(samples)
-    num_samples = torch.sum(labels, dim = 0)
+    model_disc = torch.load("disc_MNIST_unbalanced2/model_disc_" + str(run) +".pt")
+    train_samples, train_prior_probs, train_labels,list_test_samples, list_test_prior_probs, list_test_labels,logit_transform, pca_transform = torch.load("disc_MNIST_unbalanced2/datasets_" + str(run) + ".pt")
+    print('run ' + str(run))
+    train_accuracy = compute_accuracy(model_disc.log_prob(train_samples), train_labels)
+    list_train_accuracy.append(train_accuracy)
+    print('train accurarcy ' + str(train_accuracy.item()))
+    test_accuracy = compute_accuracy(model_disc.log_prob(list_test_samples[0]), list_test_labels[0])
+    list_test_accuracy.append(test_accuracy)
+    print('test accurarcy ' + str(test_accuracy.item()))
+mean_train_accuracy = torch.tensor(list_train_accuracy).mean()
+mean_test_accuracy = torch.tensor(list_test_accuracy).mean()
+std_train_accuracy = torch.tensor(list_train_accuracy).std()
+std_test_accuracy = torch.tensor(list_test_accuracy).std()
+print("train accuracy = " + str(mean_train_accuracy) + "+/-" + str(std_train_accuracy))
+print("test accuracy = " + str(mean_test_accuracy) + "+/-" + str(std_test_accuracy))
 
-    r = range(0, 10)
-    train_prior_probs = torch.tensor([(i+1) for i in r])*num_samples
-    train_prior_probs = train_prior_probs/torch.sum(train_prior_probs)
-    test_prior_probs = torch.tensor([10-i for i in r])*num_samples
-    test_prior_probs = test_prior_probs/torch.sum(test_prior_probs)
 
-    train_samples, train_labels = [],[]
-    test_samples, test_labels = [],[]
-    for label in range(labels.shape[-1]):
-        current_samples = samples[labels[:,label] == 1]
-        current_labels = labels[labels[:,label] == 1]
-        for_train = current_samples.shape[0]*train_prior_probs[label]/(train_prior_probs[label] + test_prior_probs[label])
-        train_samples.append(current_samples[:int(for_train)])
-        test_samples.append(current_samples[int(for_train):])
-        train_labels.append(current_labels[:int(for_train)])
-        test_labels.append(current_labels[int(for_train):])
-    train_samples, train_labels = torch.cat(train_samples),torch.cat(train_labels)
-    test_samples, test_labels = torch.cat(test_samples),torch.cat(test_labels)
-    datasets = (train_samples, train_prior_probs, train_labels, [test_samples], [test_prior_probs], [test_labels], logit_transform, pca_transform)
-    torch.save(datasets,"gen_MNIST_unbalanced/datasets_" + str(run) + ".pt")
+print("Retrieving generative results")
 
-    sample_dim = train_samples.shape[-1]
-    C = train_labels.shape[-1]
-    structure = [[ConditionalRealNVPLayer, {'hidden_dims': [80, 80, 80]}] for i in range(6)] + [
-        [ConditionalDIFLayer, {'hidden_dims': [32, 32], 'K': 3}] for i in range(1)]
-    model_gen = GenerativeClassifier(sample_dim, C, structure)
-    print(model_gen.compute_number_params())
-    model_gen.gibbs(5, 400, int(70000 / 20), train_samples, train_labels, [test_samples],
-                    [test_prior_probs], [test_labels])
-    torch.save(model_gen,"gen_MNIST_unbalanced/model_gen_" +str(run) + ".pt")
+list_train_accuracy = []
+list_test_accuracy = []
+list_train_accuracy = []
+list_test_accuracy = []
+for run in range(number_runs):
+    model_gen = torch.load("gen_MNIST_unbalanced2/model_gen_" + str(run) +".pt")
+    train_samples, train_prior_probs, train_labels,test_samples, test_prior_probs, test_labels,logit_transform, pca_transform = torch.load("gen_MNIST_unbalanced2/datasets_" + str(run) + ".pt")
+    print('run ' + str(run))
+    train_accuracy = compute_accuracy(model_gen.log_posterior_prob(train_samples, train_prior_probs), train_labels)
+    list_train_accuracy.append(train_accuracy)
+    print('train accurarcy ' + str(train_accuracy.item()))
+    test_accuracy = compute_accuracy(model_gen.log_posterior_prob(list_test_samples[0], list_test_prior_probs[0]), list_test_labels[0])
+    list_test_accuracy.append(test_accuracy)
+    print('test accurarcy ' + str(test_accuracy.item()))
+mean_train_accuracy = torch.tensor(list_train_accuracy).mean()
+mean_test_accuracy = torch.tensor(list_test_accuracy).mean()
+std_train_accuracy = torch.tensor(list_train_accuracy).std()
+std_test_accuracy = torch.tensor(list_test_accuracy).std()
+print("train accuracy = " + str(mean_train_accuracy) + "+/-" + str(std_train_accuracy))
+print("test accuracy = " + str(mean_test_accuracy) + "+/-" + str(std_test_accuracy))

@@ -111,9 +111,8 @@ class GenerativeClassifier(torch.nn.Module):
             total_labels+= [torch.nn.functional.one_hot(torch.distributions.Categorical(torch.exp(self.log_posterior_prob(test_samples, test_prior_probs))).sample(), num_classes = self.C)]
         total_labels = torch.cat(total_labels, dim = 0)
         for t in range(T):
-            self.conditional_model = FlowConditionalDensityEstimation(torch.randn(1, self.samples_dim),torch.ones(1, self.C), structure)
+            self.conditional_model = FlowConditionalDensityEstimation(torch.randn(1, self.sample_dim),torch.ones(1, self.C), structure)
             self.train(epochs, batch_size, total_samples, total_labels, [],[],recording_frequency, lr, weight_decay)
-            print(compute_accuracy(model_gen.log_posterior_prob(train_samples, train_prior_probs), train_labels))
             total_labels = [train_labels]
             for test_samples, test_prior_probs in zip(list_test_samples, list_test_prior_probs):
                 total_labels += [torch.nn.functional.one_hot(torch.distributions.Categorical(
@@ -124,19 +123,19 @@ sample_dim = train_samples.shape[-1]
 C = train_labels.shape[-1]
 structure = [[ConditionalRealNVPLayer, {'hidden_dims': [80, 80, 80]}] for i in range(6)] + [[ConditionalDIFLayer, {'hidden_dims': [32, 32], 'K': 3}] for i in range(1)]
 model_gen = GenerativeClassifier(sample_dim, C, structure)
-train_loss_trace = model_gen.train(200, int(train_samples.shape[0] / 20), train_samples,  train_labels,[test_samples],[test_prior_probs],lr=5e-3, recording_frequency=20)
+train_loss_trace = model_gen.train(200, int(train_samples.shape[0] / 20), train_samples,  train_labels,[],[],lr=5e-3, recording_frequency=20)
 print(compute_accuracy(model_gen.log_posterior_prob(train_samples, train_prior_probs), train_labels))
 print(compute_accuracy(model_gen.log_posterior_prob(test_samples, test_prior_probs), test_labels))
 print(compute_accuracy(model_gen.log_posterior_prob(unlabeled_samples, unlabeled_prior_probs), unlabeled_labels))
-train_loss_trace += model_gen.train(200, int(train_samples.shape[0] / 20), train_samples,train_labels,[test_samples],[test_prior_probs], lr=1e-3, recording_frequency=20)
+train_loss_trace += model_gen.train(200, int(train_samples.shape[0] / 20), train_samples,train_labels,[],[], lr=1e-3, recording_frequency=20)
 print(compute_accuracy(model_gen.log_posterior_prob(train_samples, train_prior_probs), train_labels))
 print(compute_accuracy(model_gen.log_posterior_prob(test_samples, test_prior_probs), test_labels))
 print(compute_accuracy(model_gen.log_posterior_prob(unlabeled_samples, unlabeled_prior_probs), unlabeled_labels))
-train_loss_trace += model_gen.train(200, int(train_samples.shape[0] / 20), train_samples,train_labels,[test_samples],[test_prior_probs], lr=5e-4, recording_frequency=20)
+train_loss_trace += model_gen.train(200, int(train_samples.shape[0] / 20), train_samples,train_labels,[],[], lr=5e-4, recording_frequency=20)
 print(compute_accuracy(model_gen.log_posterior_prob(train_samples, train_prior_probs), train_labels))
 print(compute_accuracy(model_gen.log_posterior_prob(test_samples, test_prior_probs), test_labels))
 print(compute_accuracy(model_gen.log_posterior_prob(unlabeled_samples, unlabeled_prior_probs), unlabeled_labels))
-train_loss_trace += model_gen.train(200, int(train_samples.shape[0] / 20), train_samples,train_labels,[test_samples],[test_prior_probs], lr=1e-4, recording_frequency=20)
+train_loss_trace += model_gen.train(200, int(train_samples.shape[0] / 20), train_samples,train_labels,[],[], lr=1e-4, recording_frequency=20)
 print(compute_accuracy(model_gen.log_posterior_prob(train_samples, train_prior_probs), train_labels))
 print(compute_accuracy(model_gen.log_posterior_prob(test_samples, test_prior_probs), test_labels))
 print(compute_accuracy(model_gen.log_posterior_prob(unlabeled_samples, unlabeled_prior_probs), unlabeled_labels))

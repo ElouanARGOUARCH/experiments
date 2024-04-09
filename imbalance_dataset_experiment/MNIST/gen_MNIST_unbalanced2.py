@@ -107,9 +107,9 @@ for run in range(number_runs):
     num_samples = torch.sum(labels, dim = 0)
 
     r = range(0, 10)
-    train_prior_probs = torch.tensor([(i+1) for i in r])*num_samples
+    train_prior_probs = torch.tensor([1 for i in r])*num_samples
     train_prior_probs = train_prior_probs/torch.sum(train_prior_probs)
-    test_prior_probs = torch.tensor([10-i for i in r])*num_samples
+    test_prior_probs = torch.tensor([1 for i in r])*num_samples
     test_prior_probs = test_prior_probs/torch.sum(test_prior_probs)
 
     train_samples, train_labels = [],[]
@@ -117,7 +117,7 @@ for run in range(number_runs):
     for label in range(labels.shape[-1]):
         current_samples = samples[labels[:,label] == 1]
         current_labels = labels[labels[:,label] == 1]
-        for_train = current_samples.shape[0]*train_prior_probs[label]/(train_prior_probs[label] + test_prior_probs[label])
+        for_train = current_samples.shape[0]/10
         train_samples.append(current_samples[:int(for_train)])
         test_samples.append(current_samples[int(for_train):])
         train_labels.append(current_labels[:int(for_train)])
@@ -125,7 +125,7 @@ for run in range(number_runs):
     train_samples, train_labels = torch.cat(train_samples),torch.cat(train_labels)
     test_samples, test_labels = torch.cat(test_samples),torch.cat(test_labels)
     datasets = (train_samples, train_prior_probs, train_labels, [test_samples], [test_prior_probs], [test_labels], logit_transform, pca_transform)
-    torch.save(datasets,"gen_MNIST_unbalanced/datasets_" + str(run) + ".pt")
+    torch.save(datasets,"gen_MNIST_unbalanced2/datasets_" + str(run) + ".pt")
 
     sample_dim = train_samples.shape[-1]
     C = train_labels.shape[-1]
@@ -135,4 +135,4 @@ for run in range(number_runs):
     print(model_gen.compute_number_params())
     model_gen.gibbs(5, 400, int(70000 / 20), train_samples, train_labels, [test_samples],
                     [test_prior_probs], [test_labels])
-    torch.save(model_gen,"gen_MNIST_unbalanced/model_gen_" +str(run) + ".pt")
+    torch.save(model_gen,"gen_MNIST_unbalanced2/model_gen_" +str(run) + ".pt")

@@ -23,7 +23,7 @@ unlabeled_samples, unlabeled_labels = samples[:20000], labels[:20000].float()
 samples, labels = samples[20000:60000], labels[20000:60000].float()
 
 r = range(1, 11)
-train_prior_probs = torch.tensor([i**2 for i in r])*num_samples
+train_prior_probs = torch.tensor([1 for i in r])*num_samples
 train_prior_probs = train_prior_probs/torch.sum(train_prior_probs)
 test_prior_probs = train_prior_probs.flip(dims = [0])
 unlabeled_prior_probs = torch.tensor([1 for i in r])*num_samples
@@ -109,7 +109,7 @@ class Classifier(torch.nn.Module):
         self.to(torch.device('cpu'))
         return train_loss_trace, unlabeled_loss_trace, test_loss_trace, indices
 
-model_disc = Classifier(train_samples.shape[-1], train_labels.shape[-1],[256,256,256])
+model_disc = Classifier(train_samples.shape[-1], train_labels.shape[-1],[256,256,256,256])
 print(model_disc.compute_number_params())
 train_loss_trace, unlabeled_loss_trace, test_loss_trace, indices = model_disc.train(1000,2000,train_samples,train_labels,unlabeled_samples,unlabeled_labels, test_samples, test_labels, recording_frequency=20)
 plt.plot(train_loss_trace)

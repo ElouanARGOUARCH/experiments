@@ -5,11 +5,12 @@ from tqdm import tqdm
 from conditional_density_estimation import *
 from misc.metrics import *
 
-class GenerativeClassifierSemiSupervised(torch.nn.Module):
+class GenerativeClassifier(torch.nn.Module):
     def __init__(self, samples_dim, labels_dim, structure, prior_probs=None):
         super().__init__()
         self.sample_dim = samples_dim
         self.C = labels_dim
+        self.structure = structure
         self.conditional_model = FlowConditionalDensityEstimation(torch.randn(1, samples_dim),
                                                                   torch.ones(1, labels_dim), structure)
         if prior_probs is None:
@@ -36,21 +37,19 @@ class GenerativeClassifierSemiSupervised(torch.nn.Module):
         log_joint = self.log_prob(samples) + torch.log(prior.unsqueeze(0))
         return log_joint - torch.logsumexp(log_joint, dim = -1, keepdim=True)
 
-    def train(self, epochs, batch_size, train_samples, train_prior_probs, train_labels, test_samples, test_prior_probs, test_labels, recording_frequency=1, lr=5e-3,
-              weight_decay=5e-5):
+    def train(self, epochs, batch_size, train_samples, train_labels, list_test_samples = [], list_test_prior_probs = [],list_test_labels = [],verbose = False, recording_frequency=1, lr=5e-3, weight_decay=5e-5):
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.to(device)
         para_dict = []
         for model in self.conditional_model.model:
             para_dict.insert(-1, {'params': model.parameters(), 'lr': lr, 'weight_decay': weight_decay})
         optimizer = torch.optim.Adam(para_dict)
-        current_samples = torch.cat([train_samples, test_samples])
-        current_labels = torch.cat(
-            [train_labels,test_prior_probs.unsqueeze(0).repeat(test_samples.shape[0], 1)])
-        dataset = torch.utils.data.TensorDataset(current_samples, current_labels)
-        aggregate_loss_trace = []
-        train_loss_trace = []
-        test_loss_trace = []
+        total_samples = torch.cat([train_samples] + list_test_samples, dim = 0)
+        total_labels = torch.cat([train_labels] + [list_test_prior_probs[i].unsqueeze(0).repeat(list_test_samples[i].shape[0],1) for i in range(len(list_test_prior_probs))], dim=0)
+        dataset = torch.utils.data.TensorDataset(total_samples, total_labels)
+        if verbose:
+            train_loss_trace = []
+            list_test_loss_trace = [[] for i in range(len(list_test_samples))]
         pbar = tqdm(range(epochs))
         for __ in pbar:
             self.to(device)
@@ -60,31 +59,52 @@ class GenerativeClassifierSemiSupervised(torch.nn.Module):
                 loss = self.loss(batch[0].to(device), batch[1].to(device))
                 loss.backward()
                 optimizer.step()
-            if __ % recording_frequency == 0:
+            if __ % recording_frequency == 0 and verbose:
                 with torch.no_grad():
                     self.to(torch.device('cpu'))
-                    aggregate_loss = self.loss(current_samples, current_labels).item()
-                    aggregate_loss_trace.append(aggregate_loss)
                     train_loss = self.loss(train_samples, train_labels).item()
                     train_loss_trace.append(train_loss)
-                    test_loss = self.loss(test_samples, test_labels).item()
-                    test_loss_trace.append(test_loss)
-                    pbar.set_postfix_str('aggregate_loss = ' + str(round(aggregate_loss, 4))
-                                         + '; train_loss = ' + str(round(train_loss, 4))
-                                         + '; test_loss = ' + str(round(test_loss, 4)) + '; device = ' + str(device))
+                    postfix_str = 'device = ' + str(
+                        device) + '; train_loss = ' + str(round(train_loss, 4))
+                    for i in range(len(list_test_samples)):
+                        test_loss = self.loss(list_test_samples[i], list_test_labels[i]).item()
+                        list_test_loss_trace[i].append(test_loss)
+                        postfix_str += '; test_loss_' + str(i) + ' = ' + str(round(test_loss, 4))
+                    pbar.set_postfix_str(postfix_str)
         self.to(torch.device('cpu'))
-        return aggregate_loss_trace, train_loss_trace, test_loss_trace
+        if verbose:
+            return train_loss_trace, list_test_loss_trace
 
-number_runs = 5
+    def gibbs(self, T, epochs, batch_size, train_samples, train_labels,list_test_samples = [], list_test_prior_probs = [], list_test_labels = [], recording_frequency = 1, lr = 5e-3, weight_decay = 5e-5):
+        self.train(epochs, batch_size, train_samples, train_labels, [],[],[],False,recording_frequency, lr, weight_decay)
+        total_samples = torch.cat([train_samples] + list_test_samples, dim = 0)
+        print(compute_accuracy(model_gen.log_posterior_prob(train_samples, train_prior_probs), train_labels))
+        total_labels = [train_labels]
+        for i in range(len(list_test_samples)):
+            print(compute_accuracy(model_gen.log_posterior_prob(list_test_samples[i], list_test_prior_probs[i]),list_test_labels[i]))
+            total_labels += [torch.nn.functional.one_hot(torch.distributions.Categorical(torch.exp(self.log_posterior_prob(list_test_samples[i], list_test_prior_probs[i]))).sample(),num_classes=self.C)]
+        total_labels = torch.cat(total_labels, dim=0)
+        for t in range(T):
+            self.conditional_model = FlowConditionalDensityEstimation(torch.randn(1, self.sample_dim),torch.ones(1, self.C), self.structure)
+            self.train(epochs, batch_size, total_samples, total_labels, [],[],[],False,recording_frequency, lr, weight_decay)
+            print(compute_accuracy(model_gen.log_posterior_prob(train_samples, train_prior_probs), train_labels))
+            total_labels = [train_labels]
+            for i in range(len(list_test_samples)):
+                print(compute_accuracy(model_gen.log_posterior_prob(list_test_samples[i], list_test_prior_probs[i]), list_test_labels[i]))
+                total_labels += [torch.nn.functional.one_hot(torch.distributions.Categorical(torch.exp(self.log_posterior_prob(list_test_samples[i], list_test_prior_probs[i]))).sample(), num_classes=self.C)]
+            total_labels = torch.cat(total_labels, dim=0)
+
+number_runs = 1
+
 for run in range(number_runs):
     logit_transform = logit(alpha = 1e-6)
     samples, labels = get_MNIST_dataset(one_hot = True)
     samples, randperm = shuffle(logit_transform.transform(samples))
     labels,_ = shuffle(labels, randperm)
+    labels = labels.float()
     pca_transform = PCA(samples, n_components=100)
     samples = pca_transform.transform(samples)
     num_samples = torch.sum(labels, dim = 0)
-    samples, labels = samples[20000:60000], labels[20000:60000].float()
 
     r = range(0, 10)
     train_prior_probs = torch.tensor([1 for i in r])*num_samples
@@ -104,43 +124,15 @@ for run in range(number_runs):
         test_labels.append(current_labels[int(for_train):])
     train_samples, train_labels = torch.cat(train_samples),torch.cat(train_labels)
     test_samples, test_labels = torch.cat(test_samples),torch.cat(test_labels)
-    datasets = (train_samples, train_prior_probs, train_labels, test_samples, test_prior_probs, test_labels, logit_transform, pca_transform)
+    datasets = (train_samples, train_prior_probs, train_labels, [test_samples], [test_prior_probs], [test_labels], logit_transform, pca_transform)
     torch.save(datasets,"gen_MNIST_balanced/datasets_" + str(run) + ".pt")
 
     sample_dim = train_samples.shape[-1]
     C = train_labels.shape[-1]
-    structure = [[ConditionalRealNVPLayer, {'hidden_dims': [80, 80, 80]}] for i in range(4)] + [[ConditionalDIFLayer, {'hidden_dims': [32, 32], 'K': 3}] for i in range(1)]
-    model_gen = GenerativeClassifierSemiSupervised(sample_dim,C, structure)
-    model_gen.conditional_model.initialize_with_EM(torch.cat([train_samples, test_samples], dim=0),50, verbose=False)
-    aggregate_loss_trace,train_loss_trace, test_loss_trace, indices = [],[],[],[]
-    _ = model_gen.train(200, int(train_samples.shape[0] / 20), train_samples,train_prior_probs, train_labels, test_samples,test_prior_probs,test_labels, lr=5e-3, recording_frequency=10)
-    print(compute_accuracy(model_gen.log_posterior_prob(train_samples, train_prior_probs), train_labels))
-    print(compute_accuracy(model_gen.log_posterior_prob(test_samples,test_prior_probs), test_labels))
-    aggregate_loss_trace += _[0]
-    train_loss_trace += _[1]
-    test_loss_trace += _[2]
-    _ = model_gen.train(200, int(train_samples.shape[0] / 20), train_samples, train_prior_probs, train_labels,
-                        test_samples, test_prior_probs, test_labels, lr=1e-3, recording_frequency=10)
-    print(compute_accuracy(model_gen.log_posterior_prob(train_samples, train_prior_probs), train_labels))
-    print(compute_accuracy(model_gen.log_posterior_prob(test_samples,test_prior_probs), test_labels))
-    aggregate_loss_trace += _[0]
-    train_loss_trace += _[1]
-    test_loss_trace += _[2]
-    _ = model_gen.train(200, int(train_samples.shape[0] / 20), train_samples, train_prior_probs, train_labels,
-                        test_samples, test_prior_probs, test_labels, lr=5e-4, recording_frequency=10)
-    print(compute_accuracy(model_gen.log_posterior_prob(train_samples, train_prior_probs), train_labels))
-    print(compute_accuracy(model_gen.log_posterior_prob(test_samples,test_prior_probs), test_labels))
-    aggregate_loss_trace += _[0]
-    train_loss_trace += _[1]
-    test_loss_trace += _[2]
-    _ = model_gen.train(200, int(train_samples.shape[0] / 20), train_samples, train_prior_probs, train_labels,
-                        test_samples, test_prior_probs, test_labels, lr=1e-4, recording_frequency=10)
-    print(compute_accuracy(model_gen.log_posterior_prob(train_samples, train_prior_probs), train_labels))
-    print(compute_accuracy(model_gen.log_posterior_prob(test_samples,test_prior_probs), test_labels))
-    aggregate_loss_trace += _[0]
-    train_loss_trace += _[1]
-    test_loss_trace += _[2]
-    torch.save(aggregate_loss_trace, "gen_MNIST_balanced/aggregate_loss_trace_" + str(run) + ".pt")
-    torch.save(train_loss_trace, "gen_MNIST_balanced/train_loss_trace_" + str(run) + ".pt")
-    torch.save(test_loss_trace, "gen_MNIST_balanced/test_loss_trace_" + str(run) + ".pt")
+    structure = [[ConditionalRealNVPLayer, {'hidden_dims': [80, 80, 80]}] for i in range(6)] + [
+        [ConditionalDIFLayer, {'hidden_dims': [32, 32], 'K': 3}] for i in range(1)]
+    model_gen = GenerativeClassifier(sample_dim, C, structure)
+    print(model_gen.compute_number_params())
+    model_gen.gibbs(5, 400, int(70000 / 20), train_samples, train_labels, [test_samples],
+                    [test_prior_probs], [test_labels])
     torch.save(model_gen,"gen_MNIST_balanced/model_gen_" +str(run) + ".pt")
